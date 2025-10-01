@@ -1,1 +1,0 @@
-# table_contest_2025
