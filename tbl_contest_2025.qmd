@@ -1,0 +1,631 @@
+---
+title: "Presenting Z.1 Financial Data with `gt()` tables"
+execute:
+  echo: false
+  warning: false
+  message: false
+format:
+  html: 
+    title-block-banner: true
+    embed-resources: false
+    page-layout: full
+    
+editor: visual
+---
+
+```{r,message=FALSE,warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(gt)
+library(stringr)
+library(gtExtras)
+options(scipen = 999)
+library(extrafont)
+library(fontawesome)
+```
+
+```{r}
+load('series.RDA')
+load('df1.RDA')
+```
+
+## Overview
+
+This document has two main objectives. First, to provide an overview of the Z.1 dataset --- the *Financial Accounts of the United States*. Second, to demonstrate table creation in R using the [gt()](https://gt.rstudio.com){target="_blank"} package. By combining a conceptual overview of Z.1 with practical `gt()` examples, this document aims to give both an understanding of the data and a reproducible approach for presenting it effectively.
+
+The **Financial Accounts of the United States**, commonly referred to as the **Z.1 Report** or simply **Z1**, is a quarterly publication by the **Federal Reserve Board** that provides a comprehensive and detailed picture of the financial system and the flow of funds in the U.S. economy.
+
+At its core, the Z.1 tracks the assets, liabilities, and financial flows across all major sectors of the economy---households, businesses, government, and the rest of the world---showing how funds move between them. Because of this, it is often called the **Flow of Funds Accounts**. Although the data is publicly available, the large number of datasets, scattered tables, and extensive definitions can make it challenging to understand and analyze. While obtaining the data is straightforward, its size and complexity can make practical use difficult. In this document, we will use mainly the `gt()`package, along with other packages, to provide a structured and accessible introduction to the Z.1 data.
+
+### Sectors
+
+The Z.1 organizes the economy into **sectors**, which represent the different types of economic actors holding assets or issuing liabilities. Each sector has its own balance sheet and financial flows, showing how funds move through the economy. Examples of sectors are **Households and Nonprofit Organizations** , **Non-financial Businesses**, **Financial Institutions**, **Government**, and **Rest of the World**.
+
+```{r}
+# Create a Financial Times style theme function for gt tables
+ft_theme <- function(gt_table, 
+                     include_subtitle = TRUE, 
+                     compact = FALSE, 
+                     special_columns = NULL) {
+  
+  # Define colors
+  colors <- list(
+    background = "#FFF1E5",      
+    background_alt = "#F2E9E1",  
+    header = "#0A5E66",          
+    text_dark = "#1A1919",       
+    text_medium = "#333333",     
+    border_light = "#D9D9D9"     
+  )
+  
+  # Increased base padding for better visibility
+  base_padding <- ifelse(compact, 6, 8)  
+  
+  
+  styled_table <- gt_table %>%
+    tab_options(
+      table.font.size = 14,                 
+      heading.title.font.size = 20,         
+      heading.subtitle.font.size = 13,      
+      table.width = pct(100),
+      
+      # borders 
+      table.border.top.style = "solid",
+      table.border.top.width = px(3),      
+      table.border.top.color = colors$header,
+      
+      table.border.bottom.style = "solid",
+      table.border.bottom.width = px(2),    
+      table.border.bottom.color = colors$header,
+      
+      # Colors 
+      table.background.color = colors$background,
+      column_labels.background.color = colors$header,
+      column_labels.font.weight = "bold",
+      
+      # Higher contrast for alternating rows
+      row.striping.background_color = colors$background_alt,
+      
+      data_row.padding = px(base_padding),
+      
+      # Footnotes styling
+      footnotes.font.size = 12,            
+      footnotes.padding = px(10),
+      footnotes.background.color = colors$background
+    ) %>%
+    
+    opt_table_font(
+      font = list(
+        google_font(name = "Merriweather"),
+        default_fonts()
+      )
+    ) %>%
+    
+    tab_style(
+      style = cell_text(color = "white", weight = "bold", size = px(15)),  # Larger text
+      locations = cells_column_labels()
+    ) %>%
+    
+    tab_style(
+      style = list(
+        cell_text(color = colors$text_dark, weight = "bold", size = px(20)),
+        cell_fill(color = colors$background)
+      ),
+      locations = cells_title(groups = "title")
+    ) %>%
+    # Add a subtle shadow effect for the entire table
+    opt_css(
+      css = "
+        .gt_table {
+          box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+          margin-top: 12px;
+          margin-bottom: 24px;
+        }
+      "
+    )
+  
+  # Add subtitle styling if needed
+  if (include_subtitle) {
+    styled_table <- styled_table %>%
+      tab_style(
+        style = list(
+          cell_text(color = colors$text_medium, style = "italic", size = px(13)),
+          cell_fill(color = colors$background)
+        ),
+        locations = cells_title(groups = "subtitle")
+      )
+  }
+  
+  
+  styled_table <- styled_table %>%
+    tab_style(
+      style = cell_borders(
+        sides = "bottom",
+        color = colors$border_light,
+        weight = px(1.5)  
+      ),
+      locations = cells_body()
+    )
+    
+  
+  if (!is.null(special_columns) && length(special_columns) > 0) {
+    for (col in names(special_columns)) {
+      if (col %in% colnames(gt_table[["_data"]])) {
+        styled_table <- styled_table %>%
+          tab_style(
+            style = special_columns[[col]],
+            locations = cells_body(columns = col)
+          )
+      }
+    }
+  }
+  
+  
+  styled_table <- styled_table %>%
+    tab_style(
+      style = cell_text(color = "#000000", size = px(14)),  # Darker black and larger
+      locations = cells_body()
+    )
+  
+  return(styled_table)
+}
+```
+
+```{r}
+# Data: key sectors 
+sectors_df <- tibble(
+  Sector = c(
+    "Households & Nonprofit Organizations",
+    "Nonfinancial Corporate Business",
+    "Nonfinancial Noncorporate Business",
+    "Federal Government",
+    "State & Local Governments",
+    "Domestic Financial Institutions (aggregate)",
+    "Banks (Depository Institutions)",
+    "Insurance Companies",
+    "Pension Funds",
+    "Mutual Funds",
+    "Government-Sponsored Enterprises (GSEs)",
+    "Rest of the World"
+  ),
+  Description = c(
+    "Individuals and nonprofit institutions; main holders of wealth and consumers of credit.",
+    "Incorporated firms producing goods/services; issue equities and debt.",
+    "Sole proprietorships, partnerships, and other unincorporated enterprises.",
+    "Issues Treasury securities; holds and manages federal financial assets/liabilities.",
+    "Issue municipal debt and manage pension funds and other assets at state/local level.",
+    "Aggregate of banks, insurers, mutual funds, pension funds, and other intermediaries.",
+    "Commercial banks, credit unions, and savings institutions; accept deposits and make loans.",
+    "Life and property insurers; hold long-term investments and underwrite risk.",
+    "Public and private retirement funds; major holders of equities and bonds.",
+    "Investment funds pooling household and institutional savings into securities.",
+    "Agencies (e.g., Fannie Mae, Freddie Mac) playing a central role in mortgage markets.",
+    "Foreign investors and institutions interacting with U.S. financial markets."
+  )
+)
+
+```
+
+```{r}
+gt_tbl_sector <- sectors_df %>%
+  gt() %>%
+  tab_header(
+    title = md("**Selected Key Sectors in the Z.1**")
+  ) %>%
+  cols_label(
+    Sector = "Sector",
+    Description = "Description"
+  ) %>%
+  fmt_markdown(columns = c("Sector", "Description")) %>%
+  cols_align(
+    align = "left",
+    columns = c("Description")
+  ) %>%
+  ft_theme()
+
+
+gt_tbl_sector
+```
+
+### Instruments
+
+A wide range of **financial instruments** are used to channel funds and influence the economy. Broadly, these can be grouped into:
+
+-   **Equity instruments** -- such as stocks, which represent ownership in a company.
+
+-   **Debt instruments** -- such as bonds, loans, and commercial paper, which reflect borrowing and lending relationships.
+
+-   **Derivative instruments** -- such as options, futures, and swaps, whose value depends on an underlying asset, reference rate, or index.
+
+Financial instruments serve multiple purposes: raising capital, generating income, hedging risk, or speculating on price movements. They are traded across a variety of markets, including stock exchanges, over-the-counter (OTC) markets, and other organized trading platforms. **Financial institutions**---banks, insurance companies, mutual funds, and investment firms---play a central role by issuing securities, facilitating trading, and managing portfolios. At the same time, **regulators** oversee these markets to protect investors and maintain financial stability.
+
+In the Z.1, these instruments appear as both **assets** and **liabilities** across sectors. For example, household wealth may include equities as assets, while corporations may issue bonds as liabilities.
+
+```{r}
+# Data: key instruments and descriptions
+instruments_df <- tibble(
+  Instrument = c(
+    "Treasury Securities",
+    "Municipal Securities",
+    "Corporate Bonds",
+    "Commercial Paper",
+    "Mortgages",
+    "Consumer Credit",
+    "Bank Loans",
+    "Equities (Corporate Stock)",
+    "Mutual Fund Shares",
+    "Pension Fund Reserves",
+    "Deposits",
+    "Derivatives"
+  ),
+  Description = c(
+    "Debt issued by the U.S. federal government; benchmark safe asset.",
+    "Bonds issued by state and local governments to fund public projects.",
+    "Long-term debt issued by corporations to raise capital.",
+    "Short-term debt issued by corporations and financial institutions.",
+    "Loans secured by real estate; major component of household and business debt.",
+    "Credit cards, auto loans, and other personal borrowing.",
+    "Loans made by commercial banks and other depository institutions.",
+    "Shares of ownership in corporations; major component of household wealth.",
+    "Investment fund shares held by households and institutions.",
+    "Assets held in retirement accounts and pension plans.",
+    "Checking, savings, and time deposits at banks and other institutions.",
+    "Contracts like options, futures, and swaps tied to underlying assets."
+  )
+)
+
+```
+
+```{r}
+
+gt_tbl_instruments <- instruments_df %>%
+  gt() %>%
+  tab_header(
+    title = md("**Selected Key Instruments in the Z.1**")
+  ) %>%
+  cols_label(
+    Instrument = "Instrument",
+    Description = "Description"
+  ) %>%
+  fmt_markdown(columns = c("Instrument", "Description")) %>%
+  cols_align(
+    align = "left",
+    columns = c("Description")
+  ) %>%
+  ft_theme()
+
+
+gt_tbl_instruments 
+
+```
+
+By combining **sectors** and **instruments**, the Z.1 provides a matrix-like view of the economy: which sectors issue or hold which instruments, and how financial claims link them together. This structure allows analysts to see not only total wealth or debt levels, but also the connections between borrowers, lenders, and investors.
+
+```{r}
+# Create the data frame
+financial_matrix <- data.frame(
+  Sector = c(
+    "Households & Nonprofits", 
+    "Nonfin. Corporate Business",
+    "Nonfin. Noncorporate Business",
+    "Federal Government",
+    "State & Local Gov.",
+    "Banks (Depository Institutions)",
+    "Insurance Companies",
+    "Pension Funds",
+    "Mutual Funds",
+    "GSEs (e.g. Fannie/Freddie)",
+    "Rest of the World"
+  ),
+  Treasuries = c("H", "–", "–", "I", "–", "H", "H", "H", "H", "–", "H"),
+  Munis = c("H", "–", "–", "–", "I", "H", "H", "–", "H", "–", "–"),
+  Corp_Bonds = c("H", "I", "–", "–", "–", "H", "H", "H", "H", "–", "H"),
+  Comm_Paper = c("–", "I", "–", "–", "–", "H", "–", "–", "H", "–", "H"),
+  Mortgages = c("O (I)", "O (I)", "O (I)", "–", "–", "H", "H", "H", "H", "I", "H"),
+  Cons_Credit = c("O (I)", "–", "–", "–", "–", "H", "–", "–", "–", "–", "–"),
+  Bank_Loans = c("–", "O (I)", "O (I)", "–", "–", "I", "–", "–", "H", "–", "H"),
+  Equities = c("H", "I", "–", "–", "–", "H", "H", "H", "H", "–", "H"),
+  Mutual_Funds = c("H", "H", "–", "–", "–", "H", "H", "–", "I", "–", "H"),
+  Pensions = c("H", "H", "–", "–", "H", "H", "I/H", "I", "–", "–", "–"),
+  Deposits = c("H", "H", "H", "H", "H", "I", "H", "H", "H", "H", "H"),
+  Derivatives = c("–", "H", "–", "–", "–", "H", "H", "–", "H", "–", "H")
+)
+
+```
+
+```{r}
+
+financial_table <- financial_matrix %>%
+  gt() %>%
+  tab_header(
+    title = "Selected Financial Sector and Instrument Matrix"
+  ) %>%
+  cols_label(
+    Sector = "Sector \\ Instrument",
+    Treasuries = "Treasuries",
+    Munis = "Munis",
+    Corp_Bonds = "Corp Bonds",
+    Comm_Paper = "Commercial Paper",
+    Mortgages = "Mortgages",
+    Cons_Credit = "Consumer Credit",
+    Bank_Loans = "Bank Loans",
+    Equities = "Equities",
+    Mutual_Funds = "Mutual Funds",
+    Pensions = "Pensions",
+    Deposits = "Deposits",
+    Derivatives = "Derivatives"
+  ) %>%
+  ft_theme(include_subtitle = FALSE, compact = TRUE, 
+           special_columns = list(
+             "Sector" = list(
+               cell_text(weight = "bold"),
+               cell_fill(color = "#F2E9E1")
+             )
+           )) %>%
+  # Add subtle borders between columns for matrix table
+  tab_style(
+    style = cell_borders(
+      sides = "right",
+      color = "#D9D9D9",
+      weight = px(1)
+    ),
+    locations = cells_body()
+  ) %>%
+  # Add the footnotes after theme is applied
+  tab_footnote(
+    footnote = "H = Mainly a Holder (asset side)",
+    locations = cells_title()
+  ) %>%
+  tab_footnote(
+    footnote = "I = Mainly an Issuer (liability side)",
+    locations = cells_title()
+  ) %>%
+  tab_footnote(
+    footnote = "O (I) = Obligations (households & firms are borrowers, so they \"issue\" mortgages, credit, loans)",
+    locations = cells_title()
+  ) %>%
+  tab_footnote(
+    footnote = "– = Limited or no significant role",
+    locations = cells_title()
+  )%>%
+  # ADD THESE OPTIONS to minimize footnote spacing
+  tab_options(
+    footnotes.padding = px(2)
+  )
+
+
+financial_table
+
+```
+
+### Tables
+
+The **Z.1 Report** is organized into a large set of **tables**, which present the data in a structured format. Each table focuses on a particular aspect of the financial system, such as a specific sector, type of instrument, or flow of funds.Broadly, the tables fall into three categories:
+
+-   **Flows** -- showing how funds move during a quarter (borrowing, lending, saving, investment).
+
+-   **Levels** -- balance sheets at a point in time (the value of assets and liabilities outstanding).
+
+-   **Ratios and Derived Measures** -- summary indicators such as debt-to-GDP, household net worth, or leverage ratios.
+
+Each table follows a consistent coding system (e.g., *FA* for flows, *FL* for levels, *LM* for market value), making it possible to track data across time and across sectors. For example, one table may show the household sector's net worth, while another shows the federal government's outstanding debt or the banking sector's lending activity. The table below shows those description.
+
+```{r}
+series %>%
+  ungroup() %>%
+  gt()  %>%
+  tab_header(
+    title = md("**Series Prefixes and Definitions**")
+  )%>%
+  cols_label(SERIES_PREFIX= "Prefix",
+             meaning= "Meaning") %>%
+  ft_theme(include_subtitle = FALSE)
+```
+
+Because the Z.1 contains **hundreds of tables**, ranging from very detailed to highly aggregated, users can drill down into specific instruments (like mortgages, Treasury securities, or mutual funds) or step back to view summary measures of the entire U.S. financial system.
+
+```{r}
+# Data: Key Z.1 Tables
+tables_df <- tibble(
+  Table = c(
+    "Household Sector Balance Sheet",
+    "Nonfinancial Corporate Business",
+    "Federal Government Debt",
+    "State & Local Government Debt",
+    "Financial Institutions Overview",
+    "Rest of the World"
+  ),
+  Description = c(
+    "Shows assets and liabilities for households and nonprofit organizations, including real estate, equities, deposits, and debts.",
+    "Presents the balance sheet and flow data for nonfinancial corporations, including corporate bonds, bank loans, and equities issued.",
+    "Details federal debt outstanding, including Treasury securities and other federal liabilities.",
+    "Shows municipal debt issuance and holdings, as well as other state/local financial assets.",
+    "Aggregate data for banks, insurance companies, pension funds, and mutual funds; shows their assets, liabilities, and interconnections.",
+    "Captures U.S. transactions with foreign sectors, including holdings of U.S. securities and cross-border financial flows."
+  )
+)
+
+```
+
+```{r}
+
+gt_tables <- tables_df %>%
+  gt() %>%
+  tab_header(
+    title = md("**Key Tables in the Z.1**")
+  ) %>%
+  cols_label(
+    Table = "Table Name",
+    Description = "Description"
+  ) %>%
+  fmt_markdown(columns = c("Table", "Description")) %>%  # Updated syntax
+  cols_align(
+    align = "left",
+    columns = c("Description")                        # Updated syntax
+  ) %>%
+  ft_theme(include_subtitle = FALSE)
+  
+
+
+gt_tables
+```
+
+### Data
+
+Data are published **quarterly**, with data extending back to the 1950s for many series.They provide sectoral balance sheets and flow accounts, classified by financial **instruments** such as loans, equities, and deposits.Data are available in PDF tables, CSV files, XML, and an online database, with each series identified by a unique code (e.g., `FA`, `LM`). The table below provides an example of how **Prefix, Tables, Sectors, Instruments, and Instrument Types** are connected.
+
+```{r,warning=FALSE,message=FALSE}
+chart <- function(data) {
+  # Scale down values for display
+  data$value <- data$value / 100000  
+  
+  # Get first and last dates for x-axis
+  first_date <- min(data$date)
+  last_date <- max(data$date)
+  
+  plot <- ggplot(data, aes(x = date, y = value)) +
+    
+    theme_void() +
+    geom_line(linewidth = 3, color = "#d11141") +
+    geom_point(size = 5, color = "#d11141", fill = "white", shape = 22, stroke = 1.8) +
+    labs(y = "", x = "") +
+    theme(
+      axis.text.y = element_text(family = "Merriweather", size = 30, color = "black", face = "bold"),
+      axis.text.x = element_text(family = "Merriweather", size = 30, color = "black", face = "bold",
+                                 angle=0,hjust=c(0,1)),
+      
+      plot.margin = margin(0.5, 0.2, 0.5, 0.2, "cm"),
+      plot.background = element_rect(fill = "#FCF3EC", color = NA),
+      panel.background = element_rect(fill = "#FCF3EC", color = NA),
+      
+      axis.line = element_blank(),
+      panel.border = element_blank()
+    ) +
+    
+    scale_x_date(
+  breaks = c(first_date, last_date),
+  labels = function(x) {
+    years = format(x, "%Y")
+    quarters = quarter(x)
+    paste0(years, "Q", quarters)
+  },
+  expand = c(0.2, 0)
+) +
+    scale_y_continuous(
+      labels = scales::comma_format(scale = 1),
+      n.breaks = 4  # Even fewer breaks for clarity
+    )
+  
+  return(plot)
+}
+
+```
+
+```{r}
+df_plot<-df1[,c('SERIES_PREFIX','meaning','tname','Sector','Instrument','Type','date','value')]
+
+# Create the nested dataframe with plots
+plot_column <- df_plot %>%
+  group_by(SERIES_PREFIX, meaning, tname, Sector, Instrument, Type) %>%
+  nest() %>%
+  mutate(chart = purrr::map(data, chart))
+
+plot_column$plot<-NA
+df3<-plot_column[,c('SERIES_PREFIX','meaning','tname','Sector','Instrument','Type','plot')]
+df3<-as.data.frame(df3)
+
+```
+
+```{r}
+df3 %>%
+  gt() %>%
+  tab_header(
+    title = md("**Example Mapping of Z.1 Series Components**")
+  ) %>%
+  cols_label(
+    SERIES_PREFIX = "Prefix",
+    meaning = "Measurement Type",
+    tname = "Table",
+    Sector = "Sector",
+    Instrument = "Instrument",
+    Type = "Type",
+    plot = "Data"
+  ) %>%
+  ft_theme(include_subtitle = FALSE)%>%
+  text_transform(
+    locations = cells_body(columns = plot),
+    fn = function(x) {
+      purrr::map(
+        plot_column$chart, 
+        ggplot_image, 
+        height = px(100),     
+        aspect_ratio = 1.6
+      )
+    }
+  ) %>%
+  tab_footnote(
+    footnote = "Note: The Y-axis values are displayed in units of $100,000, and the data shown is limited to the period from 2019 Q1 to 2022 Q4.",
+    locations = cells_column_labels(columns = plot)
+  ) 
+
+```
+
+This short note focused on Z.1 data, but it also showed how R packages like `gt()` can help organize and present complex data clearly. Hopefully, this gives you some ideas for working with Z.1 and creating clean, interactive tables that make your analysis more accessible and reproducible. Finally,the table below lists key sources for accessing Z.1 data, documentation, and supporting materials.
+
+```{r}
+tbl1 <- tibble(
+  name = c("Tables", "Tables Definitions", "Series Structure", "Data"),
+  website = c("https://www.federalreserve.gov/apps/fof/FOFTables.aspx", "https://www.federalreserve.gov/apps/fof/Guide/z1_tables_description.pdf", "https://www.federalreserve.gov/apps/fof/SeriesStructure.aspx", "https://www.federalreserve.gov/datadownload/Choose.aspx?rel=Z1"),
+  explanation = c(
+    "The published financial accounts tables, organized by sector and instrument",
+    "Detailed explanations of each table, including the scope of data covered, the sectors involved, and the specific financial instruments included.",
+    "Documentation of the coding system, measurement types, and how series are grouped by sector, instrument, and account type.",
+    "Downloadable datasets in CSV, XML or via the Data Download Program (DDP), with quarterly historical time series available for analysis."
+  )
+)
+```
+
+```{r}
+tbl1 %>%
+  # Create HTML links in the name column
+  mutate(
+    name = map2_chr(name, website, ~paste0("<a href='", .y, "' target='_blank' style='color: #0A5E66; font-weight: bold; text-decoration: none;'>", .x, "</a>"))
+  ) %>%
+  select(-website) %>%  # Remove the URL column
+  gt() %>%
+  tab_header(
+    title = md("**Key Sources for Z.1 Financial Accounts Data and Documentation**")
+    
+  ) %>%
+  cols_label(
+    name = "Resource",        
+    explanation = "Description"
+  ) %>%
+  # Format the name column as HTML
+  fmt_markdown(columns = name) %>%
+  
+  cols_width(
+    name ~ px(200),
+    explanation ~ px(580)     
+  ) %>%
+  # Apply the FT theme
+  ft_theme() %>%
+  tab_style(
+    style = list(
+      cell_text(align = "left"),
+      cell_fill(color = "#F2E9E1")   
+    ),
+    locations = cells_body(columns = name)
+  ) %>%
+  tab_footnote(
+    footnote = "Click on source names to access official resources",
+    locations = cells_column_labels(columns = name)
+  )
+
+```
+
+::: callout-note
+-   The color palette used in this document follows the style of the [Financial Times](https://origami.ft.com/foundations/colours/){target="_blank"}.\
+-   All data and code used for this analysis are available in the corresponding [repository](https://github.com/shaf1430/table_contest_2025){target="_blank"}.
+-   Author: Hamid Shafiezadeh [LinkedIn](https://www.linkedin.com/in/hamidshafiezadeh/){target="_blank"}
+:::
